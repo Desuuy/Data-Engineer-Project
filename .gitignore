@@ -1,25 +1,47 @@
+# ===============================
 # Python cache
+# ===============================
 __pycache__/
 **/__pycache__/
 
+# ===============================
 # Output folder
+# ===============================
 Output/
 **/Output/
 
+# ===============================
 # Artifacts folder
+# ===============================
 artifacts/
 **/artifacts/
 
+# ===============================
 # Dataset
+# ===============================
 Data/
 **/Data/
 
+# ===============================
 # Spark history server
+# ===============================
 spark-warehouse/
 **/spark-warehouse/
 
+# ===============================
 # Spark logs
+# ===============================
 logs/
 **/logs/
 
-# Spark metastore
+# ===============================
+# Custom project folders (DO NOT PUSH)
+# ===============================
+ps_checker/
+**/ps_checker/
+
+pipeline_setup/
+**/pipeline_setup/
+
+Grafana/
+**/Grafana/
