@@ -1,6 +1,16 @@
 -- =============================================
 -- ELT Script: Load data từ Data Warehouse xuống Data Mart
 -- Script này sẽ được gọi định kỳ để sync data từ DW xuống DM
+-- 
+-- ✅ ĐÃ ĐƯỢC FIX:
+-- 1. Logic @ProcessDate = NULL để xử lý TẤT CẢ dữ liệu (không chỉ ngày hiện tại)
+-- 2. Xóa dữ liệu cũ trong các bảng DM khi @ProcessDate = NULL
+-- 3. Không tham chiếu đến Fact_MediaReport (đã được loại bỏ)
+-- 4. Chỉ sử dụng các bảng: DM_ContractAnalytics, DM_DailySummary, DM_ContentTypeTrend
+-- 
+-- 📝 CÁCH SỬ DỤNG:
+-- Chạy script này trong SQL Server Management Studio (SSMS)
+-- Sau đó test: EXEC sp_ELT_LoadToDataMart @ProcessDate = NULL
 -- =============================================
 
 USE DM_MediaAnalytics
@@ -25,18 +35,27 @@ BEGIN
     BEGIN TRY
         BEGIN TRANSACTION
         
-        -- Set default date nếu không có
+        -- Nếu @ProcessDate IS NULL thì xử lý TẤT CẢ dữ liệu
         IF @ProcessDate IS NULL
-            SET @ProcessDate = CAST(GETDATE() AS DATE)
-        
-        PRINT 'Bắt đầu ELT Process từ DW xuống DM cho ngày: ' + CAST(@ProcessDate AS VARCHAR(10))
+            PRINT 'Bắt đầu ELT Process từ DW xuống DM cho TẤT CẢ dữ liệu'
+        ELSE
+            PRINT 'Bắt đầu ELT Process từ DW xuống DM cho ngày: ' + CAST(@ProcessDate AS VARCHAR(10))
         
         -- 1. Load vào DM_ContractAnalytics (Denormalized)
         PRINT '1. Loading DM_ContractAnalytics...'
         
-        -- Xóa dữ liệu cũ cho ngày này
-        DELETE FROM DM_ContractAnalytics
-        WHERE DateValue = @ProcessDate
+        -- Xóa dữ liệu cũ cho ngày này (nếu có) hoặc tất cả (nếu @ProcessDate IS NULL)
+        -- Sử dụng TRUNCATE khi xóa tất cả để giải phóng space nhanh hơn
+        IF @ProcessDate IS NULL
+        BEGIN
+            -- TRUNCATE giải phóng space ngay lập tức, nhanh hơn DELETE
+            TRUNCATE TABLE DM_ContractAnalytics
+        END
+        ELSE
+        BEGIN
+            DELETE FROM DM_ContractAnalytics
+            WHERE DateValue = @ProcessDate
+        END
         
         INSERT INTO DM_ContractAnalytics (
             DateValue, Year, Quarter, Month, MonthName, Day,
@@ -66,16 +85,25 @@ BEGIN
         FROM DW_MediaAnalytics.dbo.FactContractSummary fcs
         INNER JOIN DW_MediaAnalytics.dbo.DimDate d ON fcs.DateKey = d.DateKey
         INNER JOIN DW_MediaAnalytics.dbo.DimContract c ON fcs.ContractKey = c.ContractKey
-        WHERE d.DateValue = @ProcessDate
+        WHERE (@ProcessDate IS NULL OR d.DateValue = @ProcessDate)
         
         PRINT 'Đã load ' + CAST(@@ROWCOUNT AS VARCHAR(20)) + ' dòng vào DM_ContractAnalytics'
         
         -- 2. Load vào DM_DailySummary
         PRINT '2. Loading DM_DailySummary...'
         
-        -- Xóa dữ liệu cũ cho ngày này
-        DELETE FROM DM_DailySummary
-        WHERE DateValue = @ProcessDate
+        -- Xóa dữ liệu cũ cho ngày này (nếu có) hoặc tất cả (nếu @ProcessDate IS NULL)
+        -- Sử dụng TRUNCATE khi xóa tất cả để giải phóng space nhanh hơn
+        IF @ProcessDate IS NULL
+        BEGIN
+            -- TRUNCATE giải phóng space ngay lập tức, nhanh hơn DELETE
+            TRUNCATE TABLE DM_DailySummary
+        END
+        ELSE
+        BEGIN
+            DELETE FROM DM_DailySummary
+            WHERE DateValue = @ProcessDate
+        END
         
         INSERT INTO DM_DailySummary (
             DateValue, Year, Month, Day,
@@ -101,7 +129,7 @@ BEGIN
             GETDATE()
         FROM DW_MediaAnalytics.dbo.FactContractSummary fcs
         INNER JOIN DW_MediaAnalytics.dbo.DimDate d ON fcs.DateKey = d.DateKey
-        WHERE d.DateValue = @ProcessDate
+        WHERE (@ProcessDate IS NULL OR d.DateValue = @ProcessDate)
         GROUP BY d.DateValue, d.Year, d.Month, d.Day
         
         PRINT 'Đã load ' + CAST(@@ROWCOUNT AS VARCHAR(20)) + ' dòng vào DM_DailySummary'
@@ -109,9 +137,18 @@ BEGIN
         -- 3. Load vào DM_ContentTypeTrend
         PRINT '3. Loading DM_ContentTypeTrend...'
         
-        -- Xóa dữ liệu cũ cho ngày này
-        DELETE FROM DM_ContentTypeTrend
-        WHERE DateValue = @ProcessDate
+        -- Xóa dữ liệu cũ cho ngày này (nếu có) hoặc tất cả (nếu @ProcessDate IS NULL)
+        -- Sử dụng TRUNCATE khi xóa tất cả để giải phóng space nhanh hơn
+        IF @ProcessDate IS NULL
+        BEGIN
+            -- TRUNCATE giải phóng space ngay lập tức, nhanh hơn DELETE
+            TRUNCATE TABLE DM_ContentTypeTrend
+        END
+        ELSE
+        BEGIN
+            DELETE FROM DM_ContentTypeTrend
+            WHERE DateValue = @ProcessDate
+        END
         
         INSERT INTO DM_ContentTypeTrend (
             DateValue, Year, Month, ContentType,
@@ -131,7 +168,7 @@ BEGIN
         FROM DW_MediaAnalytics.dbo.FactViewingSession fvs
         INNER JOIN DW_MediaAnalytics.dbo.DimDate d ON fvs.DateKey = d.DateKey
         INNER JOIN DW_MediaAnalytics.dbo.DimContentType ct ON fvs.ContentTypeKey = ct.ContentTypeKey
-        WHERE d.DateValue = @ProcessDate
+        WHERE (@ProcessDate IS NULL OR d.DateValue = @ProcessDate)
         GROUP BY d.DateValue, d.Year, d.Month, ct.TypeName
         
         PRINT 'Đã load ' + CAST(@@ROWCOUNT AS VARCHAR(20)) + ' dòng vào DM_ContentTypeTrend'

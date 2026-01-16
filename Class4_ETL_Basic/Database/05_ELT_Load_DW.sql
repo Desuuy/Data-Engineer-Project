@@ -1,6 +1,15 @@
 -- =============================================
 -- ELT Script: Load data từ Staging vào Data Warehouse
 -- Script này sẽ được gọi sau khi data được load vào Staging_RawData
+-- 
+-- ✅ ĐÃ ĐƯỢC FIX:
+-- 1. Sử dụng MERGE để xử lý duplicate MacAddress (fix UNIQUE KEY constraint)
+-- 2. Logic @ProcessDate = NULL để xử lý TẤT CẢ dữ liệu (không chỉ ngày hiện tại)
+-- 3. Xóa dữ liệu cũ trong FactContractSummary khi @ProcessDate = NULL
+-- 
+-- 📝 CÁCH SỬ DỤNG:
+-- Chạy script này trong SQL Server Management Studio (SSMS)
+-- Sau đó test: EXEC sp_ELT_LoadToDataWarehouse @ProcessDate = NULL
 -- =============================================
 
 USE DW_MediaAnalytics
@@ -26,11 +35,11 @@ BEGIN
     BEGIN TRY
         BEGIN TRANSACTION
         
-        -- Set default date nếu không có
+        -- Nếu @ProcessDate IS NULL thì xử lý TẤT CẢ dữ liệu
         IF @ProcessDate IS NULL
-            SET @ProcessDate = CAST(GETDATE() AS DATE)
-        
-        PRINT 'Bắt đầu ELT Process cho ngày: ' + CAST(@ProcessDate AS VARCHAR(10))
+            PRINT 'Bắt đầu ELT Process cho TẤT CẢ dữ liệu'
+        ELSE
+            PRINT 'Bắt đầu ELT Process cho ngày: ' + CAST(@ProcessDate AS VARCHAR(10))
         
         -- 1. Load vào DimContract
         PRINT '1. Loading DimContract...'
@@ -43,15 +52,23 @@ BEGIN
         
         -- 2. Load vào DimDevice
         PRINT '2. Loading DimDevice...'
-        INSERT INTO DimDevice (MacAddress, ContractKey)
-        SELECT DISTINCT 
-            s.Mac,
-            c.ContractKey
-        FROM Staging_RawData s
-        INNER JOIN DimContract c ON s.Contract = c.ContractID
-        WHERE s.Mac IS NOT NULL
-          AND (@ProcessDate IS NULL OR s.EventDate = @ProcessDate)
-          AND s.Mac NOT IN (SELECT MacAddress FROM DimDevice)
+        -- Sử dụng MERGE để xử lý duplicate MacAddress (nếu MacAddress đã tồn tại, không insert lại)
+        -- Nếu MacAddress có nhiều Contract, lấy ContractKey đầu tiên (MIN)
+        MERGE DimDevice AS target
+        USING (
+            SELECT DISTINCT 
+                s.Mac AS MacAddress,
+                MIN(c.ContractKey) AS ContractKey  -- Lấy ContractKey đầu tiên nếu có nhiều
+            FROM Staging_RawData s
+            INNER JOIN DimContract c ON s.Contract = c.ContractID
+            WHERE s.Mac IS NOT NULL
+              AND (@ProcessDate IS NULL OR s.EventDate = @ProcessDate)
+            GROUP BY s.Mac
+        ) AS source
+        ON target.MacAddress = source.MacAddress
+        WHEN NOT MATCHED THEN
+            INSERT (MacAddress, ContractKey)
+            VALUES (source.MacAddress, source.ContractKey);
         
         -- 3. Load vào FactViewingSession (Normalized)
         PRINT '3. Loading FactViewingSession...'
@@ -91,12 +108,21 @@ BEGIN
         -- 4. Load vào FactContractSummary (Denormalized summary)
         PRINT '4. Loading FactContractSummary...'
         
-        -- Xóa dữ liệu cũ cho ngày này (nếu có)
-        DELETE FROM FactContractSummary
-        WHERE DateKey IN (
-            SELECT DateKey FROM DimDate 
-            WHERE DateValue = @ProcessDate
-        )
+        -- Xóa dữ liệu cũ cho ngày này (nếu có) hoặc tất cả (nếu @ProcessDate IS NULL)
+        IF @ProcessDate IS NULL
+        BEGIN
+            -- Xóa tất cả dữ liệu cũ trong FactContractSummary
+            DELETE FROM FactContractSummary
+        END
+        ELSE
+        BEGIN
+            -- Xóa dữ liệu cũ cho ngày cụ thể
+            DELETE FROM FactContractSummary
+            WHERE DateKey IN (
+                SELECT DateKey FROM DimDate 
+                WHERE DateValue = @ProcessDate
+            )
+        END
         
         INSERT INTO FactContractSummary (
             DateKey,
@@ -126,7 +152,7 @@ BEGIN
         INNER JOIN DimContract c ON f.ContractKey = c.ContractKey
         INNER JOIN DimDevice dev ON f.DeviceKey = dev.DeviceKey
         INNER JOIN DimContentType ct ON f.ContentTypeKey = ct.ContentTypeKey
-        WHERE d.DateValue = @ProcessDate
+        WHERE (@ProcessDate IS NULL OR d.DateValue = @ProcessDate)
         GROUP BY d.DateKey, c.ContractKey
         
         COMMIT TRANSACTION
